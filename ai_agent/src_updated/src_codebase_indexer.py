@@ -19,8 +19,8 @@ INCLUDE_EXTS = {".py", ".docx", ".txt"}
 
 # Where your index lives (adjust if needed)
 INDEX_PATH = Path(
-    r"path_to_suite" #update thissssssss
-    r"\path_to_suite\code_index.json"
+    r"\src_looping_files\suite" #change
+    r"\suite\code_index.json" #change
 )
 
 # Root folder used for "grep" style tools (find_in_files, call sites, trace)
@@ -411,6 +411,32 @@ def extract_call_arguments(file_path: str, lineno: int, func_name: Optional[str]
     }
 
 
+@tool
+def find_files(path_query: str, must_contain: str = "", max_results: int = 25) -> list[str]:
+    """
+    Find files under CODE_ROOT by matching path_query in the file path.
+    Optionally require must_contain substring (also matched on the path).
+    """
+    q = (path_query or "").lower().strip()
+    req = (must_contain or "").lower().strip()
+    if not q:
+        return []
+    hits = []
+    for p in list_files():
+        pl = p.lower()
+        if q in pl and (not req or req in pl):
+            hits.append(p)
+    hits.sort(key=len)
+    return hits[: int(max_results)]
+
+_FILE_CACHE: list[str] | None = None
+def list_files() -> list[str]:
+    global _FILE_CACHE
+    if _FILE_CACHE is None:
+        _FILE_CACHE = [str(p) for p in iter_py_files(CODE_ROOT)]
+    return _FILE_CACHE
+
+
 # ----------------------------
 # Indexer (AST -> code_index.json)
 # ----------------------------
@@ -551,5 +577,5 @@ def build_index(codebase_path: str) -> Path:
 
 if __name__ == "__main__":
     # If you run this file directly, it will build the index for your suite dir.
-    codebase_path = r"path_to_suite"
+    codebase_path = r"path to suite" #change
     build_index(codebase_path)

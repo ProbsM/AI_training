@@ -1,7 +1,7 @@
 [project]
 name = "src_framework_ai"
 version = "0.1.0"
-description = "src agent"
+description = "Add your description here"
 readme = "README.md"
 requires-python = "==3.11.*"
 dependencies = [

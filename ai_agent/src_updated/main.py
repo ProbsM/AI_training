@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 from src_codebase_indexer import INDEX_PATH, build_index
 from dataclasses import dataclass, field
-from typing import List
+from typing import Optional, List
 
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage, BaseMessage, AIMessage
@@ -20,6 +20,7 @@ from src_codebase_indexer import (
     find_call_sites,
     extract_call_arguments,
     reload_index,
+    find_files,
 )
 
 STRICT_TRIGGERS = (
@@ -30,15 +31,32 @@ STRICT_TRIGGERS = (
     "step into",
 )
 
+DEBUG_KEYWORDS = {
+    "error", "exception", "traceback", "stack", "crash", "fails", "failing",
+    "bug", "debug", "fix", "wrong", "issue", "problem", "syntax",
+    "why doesn't", "not working", "hang", "timeout",
+}
 
-MAX_RECENT_MESSAGES = 12
 
+
+
+MAX_RECENT_MESSAGES = 12  # tune 8–16
+MAX_TOOL_CHARS = 6000  # adjust 4000–8000 depending on needs
 
 @dataclass
 class AgentState:
     system_message: SystemMessage
     summary: str = ""
     recent_messages: List[BaseMessage] = field(default_factory=list)
+
+    # ✅ Focus lock to prevent “wrong module” drift
+    focus_file: Optional[str] = None
+    
+    # in AgentState
+    focus_module: str | None = None
+
+    def set_focus_module(self, module_name: str | None):
+        self.focus_module = module_name.lower().strip() if module_name else None
 
     def add_user(self, text: str):
         self.recent_messages.append(HumanMessage(content=text))
@@ -49,40 +67,35 @@ class AgentState:
         self._trim()
 
     def add_tool(self, content: str, tool_call_id: str):
-        self.recent_messages.append(
-            ToolMessage(content=content, tool_call_id=tool_call_id)
-        )
+        # ToolMessage must ONLY be used as a response to a real assistant tool_call
+        self.recent_messages.append(ToolMessage(content=content, tool_call_id=tool_call_id))
         self._trim()
 
-    def _trim(self):
-        """
-        Trim message window safely.
-        Never leave a ToolMessage without its preceding assistant tool_call.
-        """
-
-        if len(self.recent_messages) <= MAX_RECENT_MESSAGES:
-            return
-
-        trimmed = self.recent_messages[-MAX_RECENT_MESSAGES:]
-
-        # If first message is a ToolMessage,
-        # we must prepend its matching assistant tool_call.
-        if isinstance(trimmed[0], ToolMessage):
-            # walk backward in original list to find preceding assistant
-            for i in range(len(self.recent_messages) - MAX_RECENT_MESSAGES - 1, -1, -1):
-                candidate = self.recent_messages[i]
-                if hasattr(candidate, "tool_calls") and candidate.tool_calls:
-                    trimmed.insert(0, candidate)
-                    break
-
-        self.recent_messages = trimmed
+    def set_focus(self, file_path: Optional[str]):
+        self.focus_file = file_path
+        if file_path:
+            # Put the lock into context so the model can’t "wander"
+            self.recent_messages.append(SystemMessage(
+                content=f"FOCUS FILE LOCK: {file_path}\n"
+                        f"You MUST use this file for analysis until the user changes the target file."
+            ))
+            self._trim()
 
     def build_context(self) -> List[BaseMessage]:
-        context = [self.system_message]
+        context: List[BaseMessage] = [self.system_message]
+        if self.focus_module:
+            context.append(SystemMessage(
+                content=f"ACTIVE MODULE: {self.focus_module}\n"
+                        f"Do NOT use other modules unless the user changes the target."
+            ))
 
         if self.summary.strip():
+            context.append(SystemMessage(content="MEMORY SUMMARY:\n" + self.summary))
+
+        if self.focus_file:
             context.append(SystemMessage(
-                content="MEMORY SUMMARY:\n" + self.summary
+                content=f"ACTIVE FILE: {self.focus_file}\n"
+                        f"Do NOT switch files unless the user asks to."
             ))
 
         context.extend(self.recent_messages)
@@ -96,13 +109,12 @@ class AgentState:
 
         prompt = (
             "Update this rolling technical memory summary.\n\n"
-            "Keep ONLY:\n"
-            "- discovered files\n"
+            "Keep ONLY durable technical facts:\n"
+            "- discovered file paths\n"
             "- key functions/classes\n"
-            "- confirmed conclusions\n"
-            "- active hypotheses\n"
-            "- unresolved issues\n\n"
-            "Remove chatter and code blocks.\n\n"
+            "- confirmed conclusions (grounded in opened code)\n"
+            "- unresolved questions\n\n"
+            "Remove chatter, repetition, and large code blocks.\n\n"
             f"Existing summary:\n{self.summary}\n\n"
             f"New transcript:\n{transcript}\n\n"
             "Return ONLY updated summary text."
@@ -111,11 +123,36 @@ class AgentState:
         resp = llm_no_tools.invoke(prompt)
         self.summary = resp.content.strip()
 
-MAX_RECENT_MESSAGES = 12  # tune 8–16
+    def _trim(self):
+        """
+        Hard window limit, but never leave a ToolMessage without its
+        preceding assistant tool_calls message (protocol-safe).
+        """
+        if len(self.recent_messages) <= MAX_RECENT_MESSAGES:
+            return
 
+        trimmed = self.recent_messages[-MAX_RECENT_MESSAGES:]
 
-MAX_TOOL_CHARS = 6000  # adjust 4000–8000 depending on needs
+        # If the first kept message is a ToolMessage, prepend the closest preceding
+        # assistant message that contained tool_calls.
+        if isinstance(trimmed[0], ToolMessage):
+            # search backward in the original list before the trimmed window
+            start_idx = len(self.recent_messages) - MAX_RECENT_MESSAGES - 1
+            for i in range(start_idx, -1, -1):
+                candidate = self.recent_messages[i]
+                if getattr(candidate, "tool_calls", None):
+                    trimmed.insert(0, candidate)
+                    break
 
+        self.recent_messages = trimmed
+
+def infer_module_from_query(user_request: str) -> str | None:
+    t = (user_request or "").lower()
+    # common pattern: "<module> __init__.py" or "<module> module"
+    m = re.search(r"\b([a-z][a-z0-9_]+)\b\s+(__init__\.py|module)\b", t)
+    if m:
+        return m.group(1)
+    return None
 
 def compact_tool_output(text: str, max_chars: int = MAX_TOOL_CHARS) -> str:
     """
@@ -142,6 +179,46 @@ def compact_tool_output(text: str, max_chars: int = MAX_TOOL_CHARS) -> str:
     )
 
 
+LINE_REF_RE = re.compile(r"(?P<path>[\w\-.\\\/]+\.py)\s*(?:[: ]line\s*)?(?P<line>\d+)?", re.IGNORECASE)
+def _extract_file_and_line(user_text: str):
+    m = LINE_REF_RE.search(user_text or "")
+    if not m:
+        return None, None
+    return m.group("path"), (int(m.group("line")) if m.group("line") else None)
+
+def _pick_best_file(matches: list[dict]) -> str | None:
+    # Prefer shortest path + contains "ChannelCard" or "Modules" if present
+    if not matches:
+        return None
+    def key(r):
+        p = (r.get("file") or "").lower()
+        score = 0
+        if "channelcard" in p: score -= 50
+        if "\\modules\\" in p or "/modules/" in p: score -= 10
+        score += len(p)
+        return score
+    return sorted(matches, key=key)[0].get("file")
+
+def resolve_and_open_seed(state: AgentState, llm_no_tools, user_request: str):
+    # bind module if user implies one
+    mod = infer_module_from_query(user_request)
+    if mod:
+        state.set_focus_module(mod)
+
+    # if module focus exists and user mentions __init__.py, search ONLY within that module
+    if state.focus_module and "__init__.py" in (user_request or "").lower():
+        must = f"\\modules\\{state.focus_module}\\"  # constraint, not hardcoded module name
+        candidates = find_files.invoke({"path_query": "__init__.py", "must_contain": must, "max_results": 10})
+        if candidates:
+            state.set_focus(candidates[0])  # set focus_file
+            code = open_code.invoke({"file_path": candidates[0], "start_line": 1, "end_line": 200})
+            code = compact_tool_output(code)
+            state.recent_messages.append(SystemMessage(content=f"FOCUS FILE CONTENT:\n{code}"))
+            state._trim()
+            return
+
+    # fallback (no module inferred): your normal symbol-based open
+    ...
 
 # Per-agent rolling summaries
 summary_qa = ""
@@ -267,7 +344,7 @@ def format_hits(hits: list[dict], max_items: int = 12) -> str:
 def ensure_index_exists() -> None:
     if not Path(INDEX_PATH).exists():
         # Build it in the directory where INDEX_PATH expects it
-        suite_root = Path(INDEX_PATH).parent  
+        suite_root = Path(INDEX_PATH).parent  # ...\SRCLoopingSuite_Rev3.1.0.6
         print(f"[info] code_index.json missing. Rebuilding at: {suite_root}")
         build_index(str(suite_root))
 
@@ -403,128 +480,75 @@ def run_agent(llm, llm_no_tools, state: AgentState, user_request: str) -> str:
         "find_call_sites": find_call_sites,
         "extract_call_arguments": extract_call_arguments,
         "reload_index": reload_index,
+        "find_files": find_files,  # NEW: must also be in llm.bind_tools(...)
     }
 
-    # -----------------------------------------
-    # 🔹 Deterministic Initial Search Seeding
-    # -----------------------------------------
-    plan = plan_search(llm_no_tools, user_request)
+    # Deterministic file resolution + auto-open seeding (SystemMessage injection only)
+    resolve_and_open_seed(state, llm_no_tools, user_request)
 
-    if plan.get("queries"):
-        try:
-            seed_hits = search_symbols_multi.invoke({
-                "queries": plan["queries"]
-            })
-
-            # 🔥 Rank by relevance
-            seed_hits = sorted(
-                seed_hits,
-                key=lambda s: score_symbol(s, plan["queries"]),
-                reverse=True
-            )
-
-            # Keep only top N
-            seed_hits = seed_hits[:12]
-            seed_text = format_hits(seed_hits, max_items=8)
-            seed_text = compact_tool_output(seed_text, max_chars=4000)
-            state.recent_messages.append(
-                SystemMessage(
-                    content="INITIAL SEARCH RESULTS (seeded):\n" + seed_text
-                )
-            )
-            state._trim()
-            
-        except Exception:
-            pass
-
-    # -----------------------------------------
-    # 🔹 Tool Loop
-    # -----------------------------------------
     for _ in range(8):
         context = state.build_context()
         ai_msg = llm.invoke(context)
 
         state.recent_messages.append(ai_msg)
+        state._trim()
 
-        # -------------------------------------
-        # No tool calls → candidate final
-        # -------------------------------------
-        if not getattr(ai_msg, "tool_calls", None):
+        tool_calls = getattr(ai_msg, "tool_calls", None) or []
 
-            # 🔒 STRICT MODE ENFORCEMENT
-            if strict_mode and not open_code_used:
-                state.add_ai(
-                    "STRICT MODE VIOLATION: You must call open_code before answering."
-                )
-                continue
+        if tool_calls:
+            for call in tool_calls:
+                name = call.get("name")
+                if name not in tool_registry:
+                    raise RuntimeError(f"Unexpected tool call: {name}")
 
-            parsed = ensure_valid_json(
-                llm_no_tools,
-                context,
-                ai_msg.content
+                args = call.get("args", {})
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except Exception:
+                        args = {}
+
+                tool_fn = tool_registry[name]
+                result = tool_fn.invoke(args)
+                result_str = str(result)
+
+                if name == "open_code":
+                    open_code_used = True
+
+                # Compact large tool outputs
+                if name == "open_code":
+                    result_str = compact_tool_output(result_str)
+                elif name in {"find_in_files", "trace_assignments", "find_call_sites", "find_files"}:
+                    result_str = compact_tool_output(result_str, max_chars=4000)
+
+                state.add_tool(result_str, call["id"])
+
+            continue
+
+        if strict_mode and not open_code_used:
+            state.add_ai(
+                "STRICT MODE VIOLATION: You must call open_code on the relevant implementation before answering."
             )
+            continue
 
-            if parsed:
-                return parsed.get("answer", ai_msg.content)
+        parsed = ensure_valid_json(llm_no_tools, context, ai_msg.content)
+        if parsed:
+            return parsed.get("answer", ai_msg.content)
 
-            return ai_msg.content
+        return ai_msg.content
 
-        # -------------------------------------
-        # Handle Tool Calls
-        # -------------------------------------
-        for call in ai_msg.tool_calls:
-            name = call["name"]
-            args = call.get("args", {})
-
-            if isinstance(args, str):
-                try:
-                    args = json.loads(args)
-                except Exception:
-                    args = {}
-
-            if name not in tool_registry:
-                raise RuntimeError(f"Unexpected tool call: {name}")
-
-            tool_fn = tool_registry[name]
-            result = tool_fn.invoke(args)
-
-            result_str = str(result)
-
-            # 🔥 Track open_code usage
-            if name == "open_code":
-                open_code_used = True
-
-            # 🔥 Compact large outputs
-            if name == "open_code":
-                result_str = compact_tool_output(result_str)
-            elif name in {
-                "find_in_files",
-                "trace_assignments",
-                "find_call_sites",
-            }:
-                result_str = compact_tool_output(result_str, max_chars=4000)
-
-            state.add_tool(result_str, call["id"])
-
-    # -----------------------------------------
-    # 🔹 Forced Final (Tool Budget Exhausted)
-    # -----------------------------------------
     forced = SystemMessage(
         content=(
-            "Tool budget exhausted. Using ONLY gathered evidence, "
-            "output valid JSON with keys: answer and evidence."
+            "TOOL BUDGET EXHAUSTED. Do NOT call any tools. "
+            "Using ONLY the evidence already gathered above, output ONLY valid JSON "
+            "with keys: answer (string), evidence (array of file:line strings)."
         )
     )
 
     context = state.build_context() + [forced]
     final = llm_no_tools.invoke(context)
 
-    parsed = ensure_valid_json(
-        llm_no_tools,
-        context,
-        final.content
-    )
-
+    parsed = ensure_valid_json(llm_no_tools, context, final.content)
     if parsed:
         return parsed.get("answer", final.content)
 
@@ -537,9 +561,10 @@ SYSTEM_CODE_QA = SystemMessage(content=(
     "You are a codebase Q&A assistant for a Python hardware test suite.\n"
     "Goal: help the user understand the codebase (what/where/how) with citations.\n\n"
     "Tools:\n"
-    "- search_symbols_multi, open_code, find_in_files, trace_assignments, find_call_sites, extract_call_arguments, reload_index\n\n"
+    "- search_symbols_multi, open_code, find_files, find_in_files, trace_assignments, find_call_sites, extract_call_arguments, reload_index\n\n"
     "Rules:\n"
-    "1) Use search_symbols_multi first.\n"
+    "0) If the user mentions a filename/path (e.g. ChannelCard\\__init__.py), use find_files first, then open_code.\n"
+    "1) Otherwise use search_symbols_multi first.\n"
     "2) If asked HOW something works, open_code before explaining.\n"
     "3) If asked where a value/path is set, trace_assignments then open_code.\n"
     "4) If asked where a function is called, find_call_sites then open_code.\n"
@@ -553,12 +578,12 @@ SYSTEM_DEBUGGER = SystemMessage(content=(
     "You are a debugging assistant for a Python hardware test suite.\n"
     "Goal: diagnose failures and propose fixes grounded in code evidence.\n\n"
     "Tools:\n"
-    "- search_symbols_multi, open_code, find_in_files, trace_assignments, find_call_sites, extract_call_arguments, reload_index\n\n"
+    "- search_symbols_multi, open_code, find_files, find_in_files, trace_assignments, find_call_sites, extract_call_arguments, reload_index\n\n"
     "Rules:\n"
     "0) NO SPECULATION RULE:\n"
     "   If the user asks \"is something wrong?\" but provides no symptom (error, failing behavior, unexpected output),\n"
     "   you MUST NOT guess. Ask ONE targeted question for the missing symptom/traceback/log.\n"
-    "1) Restate the symptom and identify likely failure points.\n"
+    "1) If the user mentions a filename/path, use find_files first, then open_code that file.\n"
     "2) For errors/failures, you MUST open_code around the suspected code path.\n"
     "3) Trace call chain and arguments: find_call_sites -> extract_call_arguments.\n"
     "4) Trace values: trace_assignments -> open_code around assignments.\n"
@@ -568,7 +593,7 @@ SYSTEM_DEBUGGER = SystemMessage(content=(
     "   For questions like: \"how does <module_name> run?\" or \"how is <module_name> executed?\"\n"
     "   Do NOT assume flow control.\n"
     "   You MUST do ALL of the following before answering:\n"
-    "   a) find_in_files(\"<module_name>\") (also try common variations like 'Calib', 'Calibration', etc.)\n"
+    "   a) find_files(\"<module_name>\") and/or find_in_files(\"<module_name>\")\n"
     "   b) locate the module implementation file (likely under SRCLooping\\\\Modules\\\\...)\n"
     "   c) open_code the entrypoint (Run/execute/main-like function) and cite it\n"
     "   d) find_call_sites(entrypoint_name) and open_code the most relevant call site\n\n"
@@ -590,6 +615,7 @@ def main() -> None:
 
     ensure_index_exists()
 
+    # LLM WITH tools
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0).bind_tools(
         [
             search_symbols_multi,
@@ -599,33 +625,39 @@ def main() -> None:
             find_call_sites,
             extract_call_arguments,
             reload_index,
+            find_files,
         ]
     )
 
+    # LLM WITHOUT tools (planner / summary / repair)
     llm_no_tools = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
+    # Independent agent states
     qa_state = AgentState(system_message=SYSTEM_CODE_QA)
     dbg_state = AgentState(system_message=SYSTEM_DEBUGGER)
 
-    print("\nTwo-mode agent ready.\n"
-          "- Prefix with 'qa:' or 'code:' to force QA mode\n"
-          "- Prefix with 'debug:' or 'dbg:' to force Debug mode\n"
-          "Type 'exit' to quit.\n")
+    print(
+        "\nTwo-mode agent ready.\n"
+        "- Prefix with 'qa:' or 'code:' to force QA mode\n"
+        "- Prefix with 'debug:' or 'dbg:' to force Debug mode\n"
+        "Type 'exit' to quit.\n"
+    )
 
     while True:
-        user_request = input("Find> ").strip()
-
-        if not user_request:
-            continue
-
-        if user_request.lower() in {"exit", "quit"}:
-            print("Goodbye!")
-            break
-
         try:
+            user_request = input("Find> ").strip()
+
+            if not user_request:
+                continue
+
+            if user_request.lower() in {"exit", "quit"}:
+                print("Goodbye!")
+                break
+
             mode = choose_agent(user_request)
             state = dbg_state if mode == "debug" else qa_state
 
+            # Add user turn once
             state.add_user(user_request)
 
             answer = run_agent(
@@ -637,10 +669,15 @@ def main() -> None:
 
             print(f"\n[{mode.upper()}]\n{answer}\n")
 
+            # Add assistant answer once
             state.add_ai(answer)
 
+            # Update rolling summary
             state.update_summary(llm_no_tools)
 
+        except KeyboardInterrupt:
+            print("\nGoodbye!")
+            break
         except Exception as e:
             print(f"\n[error] {e}\n")
 
