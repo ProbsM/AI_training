@@ -1,0 +1,72 @@
+SRC_Agent_v2:|
+-------------┘
+
+============================== Step 1 — Indexing (offline, run once) ==============================
+indexer.py runs before the agent ever starts. It scans every .py file in our codebase, parses them with tree-sitter to extract function/class blocks, splits oversized blocks into overlapping sub-chunks, generates a plain-English summary for each chunk via Claude Haiku, and stores everything in a local ChromaDB database. It also runs a second pass to extract symbol relationship chunks (what each function calls, imports, parameters) at no extra LLM cost. The result is ~1,225 chunks sitting in ./chroma_db on disk, ready to be searched.
+
+
+============================== Step 2 — App startup ==============================
+app_src.py (Chainlit) starts a web server. When a user opens the browser, @cl.on_chat_start fires and creates a CodebaseAgent instance. That agent instance lives for the entire conversation session.
+
+
+
+============================== Step 3 — Agent initialization ==============================
+CodebaseAgent.__init__() in src_agent.py does two things: creates an Anthropic client (for Claude Haiku) and creates a CodebaseRetriever instance which connects to the ChromaDB database and loads the flashrank re-ranker model into memory. An empty self.history list is created to track the conversation.
+
+
+
+============================== Step 4 — User sends a message ==============================
+Every message goes to CodebaseAgent.chat() which first checks for special intents in this order:
+
+Is the agent waiting for a session number? → handle load selection
+Does the message say "save as X"? → save conversation to JSON
+Does the message say "load"? → list saved sessions
+None of the above? → proceed to normal RAG chat
+
+
+============================== Step 5 — Retrieval (the hardwired part) ==============================
+For every normal message _rag_chat() is called, which immediately calls retriever.retrieve(user_message). The retriever runs three phases:
+
+Query expansion — generates alternative phrasings of the query (snake_case, CamelCase, SCREAMING_SNAKE, abbreviation expansions) to better match code identifiers
+Vector search — searches ChromaDB with every phrasing, collects up to 20 candidates per phrasing, merges and deduplicates results
+Re-ranking — flashrank (a local mini-LM model) scores all candidates against the original query and returns the top 3 (simple query) or top 5 (complex query) chunks
+
+
+============================== Step 6 — Context injection ==============================
+The retrieved chunks are formatted into a structured string showing file path, line numbers, summary, and raw code. This gets prepended to the user's message to create an augmented_message that looks like:
+        ## Retrieved Code Context
+        --- Chunk 1 ---
+        File: SRCLooping/.../DPIN_EPA_FreqShmooTool.py
+        ...
+
+        ## User Question
+        how does the dpin epa shmoo test work?
+        
+This augmented message is what actually gets sent to Claude — not the original user message.
+
+
+
+============================== Step 7 — Claude responds ==============================
+The augmented message is appended to self.history and the full history is sent to Claude Haiku along with the system prompt. Claude reads the retrieved chunks and generates a response grounded in the actual code. The response is appended to history and returned to the user.
+
+
+
+============================== Step 8 — Conversation continues ==============================
+On every subsequent message, steps 4-7 repeat. History grows turn by turn (capped at 20 turns). The retrieval always runs on the raw user message, not the conversation history — meaning Claude decides what to say based on retrieved chunks, but has no influence over what gets retrieved.
+
+
+
+
+
+
+
+* To do:
+LLM to decide when and what to search rather than retrieval being hardwired on every turn of conversation.
+
+
+
+
+
+
+
+
