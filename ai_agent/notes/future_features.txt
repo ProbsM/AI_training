@@ -1,0 +1,6 @@
+1. Incremental Indexing:
+    Since the codebase updates monthly, a full re-index is the safest approach because it ensures no stale chunks from deleted or renamed functions linger in the database.
+    The tradeoff is that every re-index costs ~$1 and takes 10-20 minutes. For monthly updates that's perfectly fine, but if you ever needed to update more frequently there's a smarter approach called incremental indexing where you only re-index files that actually changed, leaving everything else untouched. That's a post-V1 optimization though — not worth the added complexity right now.
+
+
+

@@ -1,0 +1,16 @@
+chainlit run app.py
+```
+
+Browser will automatically open to `http://localhost:8000` with the full chat UI. Chainlit just wraps around (`agent.py`, `retriever.py`, `memory.py`)
+
+**current project structure:**
+```
+hw_agent/
+├── indexer.py      ← run once to build the index
+├── retriever.py    ← RAG retrieval layer
+├── memory.py       ← save/load sessions
+├── agent.py        ← core chat agent
+├── app.py          ← Chainlit UI
+├── requirements.txt
+└── .chainlit/
+    └── config.toml ← UI settings

@@ -1,0 +1,18 @@
+Completed:
+1. indexer.py — parses your codebase with tree-sitter, chunks it, generates LLM summaries, stores everything in ChromaDB
+    - you can add documents to the DB now, can also delete them as well
+
+2. retriever.py — two-phase retrieval (vector search + flashrank re-ranking). flashrank re-ranking utilizes local mini-LM to weigh the top 20 searches returned by the vector search down to either 3 or 5 depending on the complexity of the user's query. 
+
+3. agent.py — full chat agent with memory, RAG context injection, and a solid system prompt. These 5 search results provided by the retriever.py is sent to an actual LLM which is used to answer the user question.
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,36 @@
+User: "save this conversation as 'voltage_debug'"
+        ↓
+agent.py detects save intent
+        ↓
+memory.py writes full conversation history to voltage_debug.json
+        ↓
+Agent: "Conversation saved as voltage_debug.json"
+
+voltage_debug.json file will be in the same location as src_agent.py
+
+
+
+
+To load a previous conversation:
+
+User: "load a conversation"
+        ↓
+agent.py detects load intent
+        ↓
+memory.py lists all .json session files in the folder
+        ↓
+Agent: "Found 3 saved sessions:
+        1. voltage_debug
+        2. new_test_script
+        3. hpcc_init_issue
+        Which would you like to load?"
+        ↓
+User: "voltage_debug"
+        ↓
+memory.py loads all turns from voltage_debug.json
+        ↓
+Claude summarizes the full history into a compact summary
+        ↓
+Summary gets prepended to history, last 20 turns appended after
+        ↓
+Agent: "Loaded voltage_debug. Here's what we covered: ..."

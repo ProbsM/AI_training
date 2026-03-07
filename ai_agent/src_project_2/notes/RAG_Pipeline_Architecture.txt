@@ -1,0 +1,20 @@
+Local Codebase Directory
+        ↓
+[1. Indexing Pipeline]        ← Run once, re-run monthly when codebase updates
+   - File parser & chunker
+   - Code-aware splitter (by function/class, not arbitrary character count)
+   - Embedding model (converts chunks → vectors)
+        ↓
+[2. Vector Database]          ← Persisted locally (no cloud needed)
+   - Stores: code chunks + embeddings + metadata (file path, function name, etc.)
+        ↓
+[3. Retrieval Layer]          ← Runs on every user query
+   - Embed the user's question
+   - Find top-K most similar code chunks
+   - Re-rank results for relevance
+        ↓
+[4. LLM (GPT/Claude/etc.)]             ← Only sees retrieved chunks, not full codebase
+   - Receives: user question + relevant chunks + chat history
+   - Returns: answer / suggestion / debugged code
+        ↓
+[5. Chat Interface]           ← What the user sees

@@ -1,0 +1,30 @@
+indexer.py
+    1. if len(block["raw_code"].splitlines()) > 2000:
+        - we need to change from 2000 to something a lot higher since py files like the hpcc spec check contain more than 2k lines of code
+        - this way those big files don't get skipped.
+
+
+
+
+
+
+Variables that cause agent to be more expensive:
+    MAX_CHUNK_LINES = 80        # py functions larger than this get sub-chunked which degrades overall context of each chunk
+                                # More chunks = more LLM summary calls during indexing which means more expensive
+                                # higher = fewer splits = better chance the full function logic is in one chunk = better code generation. Lower = more 
+                                  splits = more precise retrieval but LLM might only see part of a function.
+                                # lower the num = cheaper (less info to LLM although we have overlap lines) and the search is more precise but context 
+                                  may be lost. This probably won't allow the LLMs to create good code since they will have less context.
+    
+    SIMPLE_TOP_K         = 3    # Final chunks for simple queries (cheaper). 
+    COMPLEX_TOP_K        = 5    # Final chunks for complex queries (more expensive but more accurate answer for user). Better for the LLMs to generate  
+                                  good code.
+    
+    VECTOR_SEARCH_TOP_K = 20  # candidates before re-ranking
+
+
+
+
+
+
+so this src suite has multiple different test modules like: ChannelCard, DPS, HalInitCheck, HDMTSysVal, Calibration, Diagnostics,etc. Is it possible to make an agent dedicated solely to each one (starting with channelcard) and 

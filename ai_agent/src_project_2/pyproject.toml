@@ -1,0 +1,24 @@
+[project]
+name = "src_framework_ai"
+version = "0.1.0"
+description = "src agent"
+readme = "README.md"
+requires-python = "==3.11.*"
+dependencies = [
+    "langchain",
+    "langchain-community",
+    "langchain-openai",
+    "langchain-anthropic",
+    "python-dotenv",
+    "pydantic",
+    "pyreadline3",
+    "gradio",
+    "anthropic>=0.25.0",
+    "openai>=1.0.0",
+    "tree-sitter",
+    "tree-sitter-python",
+    "chromadb>=0.4.0",
+    "flashrank>=0.2.0",
+    "chainlit>=1.0.0",
+    "python-docx",
+]

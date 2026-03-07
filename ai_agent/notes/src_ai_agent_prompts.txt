@@ -1,0 +1,92 @@
+Agent's Purpose:
+
+This agent serves as an expert guide and coding assistant for a large, modular Python codebase that exercises and validates hardware instruments through automated testing. It serves both newcomers and experienced engineers through a chat interface.
+The agent reads the user's local codebase directory to build deep familiarity with the code structure, modules, and patterns. It never directly edits files — all suggestions are made in chat for the engineer to review and apply.
+For newcomers, it accelerates onboarding by answering questions about codebase structure, explaining how modules interact, and clarifying how hardware APIs are used.
+For experienced engineers, it debugs failing tests by analyzing user-provided log outputs alongside the codebase, and generates new test scripts or hardware API integrations that match existing code conventions.
+The codebase and user-provided logs are its only sources of truth — it never assumes hardware behavior it cannot verify from the code or logs.
+
+
+Prompt:
+"Based on this agent description, list the core features it needs (must-haves), nice-to-have features, and features I should avoid for v1 to keep scope manageable.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Here's a structured set of prompts to guide you through building your AI agent step by step:
+1. Define the Agent's Purpose
+
+"Help me write a clear, one-paragraph description of what my AI agent does, who it's for, and what problem it solves. Here's my rough idea: [your idea]"
+
+2. Break Down Capabilities
+
+"Based on this agent description, list the core features it needs (must-haves), nice-to-have features, and features I should avoid for v1 to keep scope manageable."
+
+3. Design the Architecture
+
+"What's the simplest architecture for this agent? Show me a diagram or outline of the components: inputs, processing steps, tools it needs, and outputs."
+
+4. Identify Tools & APIs
+
+"What external tools, APIs, or data sources will my agent need? For each one, tell me: what it does, if there's a free tier, and how complex it is to integrate."
+
+5. Write the System Prompt
+
+"Write a system prompt for my agent that defines its persona, goals, constraints, and how it should handle edge cases. My agent does: [description]"
+
+6. Build the Core Loop
+
+"Show me the simplest working code for my agent's main loop — taking user input, calling the LLM, handling tool use, and returning output. Use [Python/JS/etc.]."
+
+7. Add Tool Use
+
+"Show me how to add [specific tool, e.g. web search / database lookup / API call] to my agent so the LLM can decide when and how to use it."
+
+8. Handle Memory
+
+"What's the best way to give my agent memory? Compare: in-context history, vector DB retrieval, and summarization. Which fits my use case: [describe it]."
+
+9. Error Handling & Safety
+
+"What are the most common failure modes for an agent like mine, and how should I handle each one? Include: LLM errors, tool failures, infinite loops, and bad outputs."
+
+10. Evaluate & Iterate
+
+"Help me design 5 test cases to evaluate whether my agent is working correctly. Include normal cases, edge cases, and adversarial inputs."
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

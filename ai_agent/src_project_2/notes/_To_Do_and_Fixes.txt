@@ -1,0 +1,38 @@
+1. Currently using syntax aware chunking
+    - implement symbol chunking (done)
+    - memory across converstions
+        - ver1 : save chat session which can be reloaded (done)
+        - ver2 : need better retrieval implemention from db.
+            - embed chat sessions to upload to db (can't be real-time or else slows down chatbot - need to do more research on this)
+    - implement agent to decide retrieval process from db
+
+
+
+
+
+
+
+
+============================================================== [COST] =================================================================================
+Variables that cause agent to be more expensive:
+    MAX_CHUNK_LINES = 80        # py functions larger than this get sub-chunked which degrades overall context of each chunk
+                                # More chunks = more LLM summary calls during indexing which means more expensive
+                                # higher = fewer splits = better chance the full function logic is in one chunk = better code generation. Lower = more 
+                                  splits = more precise retrieval but LLM might only see part of a function.
+                                # lower the num = cheaper (less info to LLM although we have overlap lines) and the search is more precise but context 
+                                  may be lost. This probably won't allow the LLMs to create good code since they will have less context.
+    
+    SIMPLE_TOP_K         = 3    # Final chunks for simple queries (cheaper). 
+    COMPLEX_TOP_K        = 5    # Final chunks for complex queries (more expensive but more accurate answer for user). Better for the LLMs to generate  
+                                  good code. SRC code can be very messy so for accurate responses to user, need to implement either a very good indexing and retrieval system or provide LLM with more chunks (VERY expensive with new models)
+    
+    VECTOR_SEARCH_TOP_K = 20  # candidates before re-ranking
+
+
+
+
+
+
+
+
+
